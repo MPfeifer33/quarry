@@ -48,12 +48,22 @@ fn run(cli: &Cli) -> Result<(), QuarryError> {
         Command::Plan => {
             // For MVP, plan is a simplified view of what to update
             let result = audit::audit(&manifest_data, false);
+            let actionable: Vec<_> = result.findings.iter()
+                .filter(|f| matches!(f.severity, audit::Severity::Warning | audit::Severity::Error))
+                .collect();
             if cli.is_json() {
+                let plan = if actionable.is_empty() {
+                    "No updates needed. Dependencies are clean."
+                } else {
+                    "Update plan based on audit findings"
+                };
                 println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                     "ok": true,
-                    "plan": "Update plan based on audit findings",
-                    "steps": result.findings.iter()
-                        .filter(|f| matches!(f.severity, audit::Severity::Warning | audit::Severity::Error))
+                    "project": manifest_data.project_name,
+                    "project_type": manifest_data.project_type,
+                    "plan": plan,
+                    "actionable_count": actionable.len(),
+                    "steps": actionable.iter()
                         .map(|f| serde_json::json!({
                             "dep": f.dep,
                             "action": format!("{}", f.message),
@@ -63,9 +73,6 @@ fn run(cli: &Cli) -> Result<(), QuarryError> {
             } else {
                 println!("quarry plan: {}", manifest_data.project_name);
                 println!();
-                let actionable: Vec<_> = result.findings.iter()
-                    .filter(|f| matches!(f.severity, audit::Severity::Warning | audit::Severity::Error))
-                    .collect();
                 if actionable.is_empty() {
                     println!("  No updates needed. Dependencies are clean.");
                 } else {

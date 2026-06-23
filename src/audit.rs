@@ -31,6 +31,7 @@ pub enum IssueKind {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)] // Error available for future advisory checks
 pub enum Severity {
     Error,
     Warning,
@@ -168,6 +169,75 @@ fn is_exact_pin(version: &str) -> bool {
     }
     // Must have 3 components to be exact
     cleaned.split('.').count() == 3 && cleaned.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_dep(name: &str, version: &str, source: DependencySource) -> Dependency {
+        Dependency {
+            name: name.into(),
+            version_req: version.into(),
+            source,
+            features: vec![],
+            optional: false,
+            dev_only: false,
+        }
+    }
+
+    #[test]
+    fn wildcard_version_flagged() {
+        let dep = make_dep("foo", "*", DependencySource::Registry);
+        let findings = check_dependency(&dep);
+        assert!(findings.iter().any(|f| matches!(f.issue, IssueKind::WildcardVersion)));
+    }
+
+    #[test]
+    fn git_source_flagged() {
+        let dep = make_dep("foo", "1.0", DependencySource::Git);
+        let findings = check_dependency(&dep);
+        assert!(findings.iter().any(|f| matches!(f.issue, IssueKind::GitSource)));
+    }
+
+    #[test]
+    fn path_source_flagged() {
+        let dep = make_dep("foo", "1.0", DependencySource::Path);
+        let findings = check_dependency(&dep);
+        assert!(findings.iter().any(|f| matches!(f.issue, IssueKind::PathSource)));
+    }
+
+    #[test]
+    fn exact_pin_detected() {
+        assert!(is_exact_pin("1.2.3"));
+        assert!(!is_exact_pin("^1.2.3"));
+        assert!(!is_exact_pin("~1.2.3"));
+        assert!(!is_exact_pin("*"));
+        assert!(!is_exact_pin(">=1.0"));
+    }
+
+    #[test]
+    fn major_zero_detected() {
+        assert!(is_major_zero("0.10"));
+        assert!(is_major_zero("^0.10"));
+        assert!(!is_major_zero("1.0"));
+        assert!(!is_major_zero("^2.0"));
+    }
+
+    #[test]
+    fn audit_empty_deps() {
+        let manifest = ManifestData {
+            project_type: crate::manifest::ProjectType::Rust,
+            project_name: "test".into(),
+            project_version: "0.1.0".into(),
+            dependencies: vec![],
+            lockfile_exists: true,
+            lockfile_stale: false,
+        };
+        let result = audit(&manifest, false);
+        assert_eq!(result.summary.total_deps, 0);
+        assert!(result.findings.is_empty());
+    }
 }
 
 fn is_major_zero(version: &str) -> bool {

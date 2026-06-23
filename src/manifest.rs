@@ -35,6 +35,7 @@ pub struct ManifestData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)] // Unknown used as fallback in detection
 pub enum ProjectType {
     Rust,
     Node,
@@ -309,6 +310,83 @@ fn parse_gomod(repo: &Path) -> Result<ManifestData, QuarryError> {
         lockfile_exists: repo.join("go.sum").exists(),
         lockfile_stale: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parse_cargo_manifest() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), r#"
+[package]
+name = "test-proj"
+version = "0.1.0"
+
+[dependencies]
+serde = "1"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+"#).unwrap();
+        let data = parse_manifest(tmp.path()).unwrap();
+        assert_eq!(data.project_type, ProjectType::Rust);
+        assert_eq!(data.project_name, "test-proj");
+        assert_eq!(data.dependencies.len(), 3);
+        assert!(data.dependencies.iter().any(|d| d.name == "serde"));
+        assert!(data.dependencies.iter().any(|d| d.dev_only && d.name == "tempfile"));
+    }
+
+    #[test]
+    fn parse_npm_manifest() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("package.json"), r#"{
+            "name": "test-app",
+            "version": "1.0.0",
+            "dependencies": { "express": "^4.18.0" },
+            "devDependencies": { "jest": "^29.0.0" }
+        }"#).unwrap();
+        let data = parse_manifest(tmp.path()).unwrap();
+        assert_eq!(data.project_type, ProjectType::Node);
+        assert_eq!(data.dependencies.len(), 2);
+    }
+
+    #[test]
+    fn parse_pep508_simple() {
+        let (name, ver) = parse_pep508("flask>=2.0");
+        assert_eq!(name, "flask");
+        assert_eq!(ver, ">=2.0");
+    }
+
+    #[test]
+    fn parse_pep508_no_version() {
+        let (name, ver) = parse_pep508("requests");
+        assert_eq!(name, "requests");
+        assert_eq!(ver, "*");
+    }
+
+    #[test]
+    fn no_manifest_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        assert!(parse_manifest(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn cargo_dep_with_path_source() {
+        let v: toml::Value = toml::from_str(r#"path = "../lib""#).unwrap();
+        let dep = parse_cargo_dep("mylib", &v, false);
+        assert_eq!(dep.source, DependencySource::Path);
+    }
+
+    #[test]
+    fn cargo_dep_with_git_source() {
+        let v: toml::Value = toml::from_str(r#"git = "https://github.com/foo/bar""#).unwrap();
+        let dep = parse_cargo_dep("mylib", &v, false);
+        assert_eq!(dep.source, DependencySource::Git);
+    }
 }
 
 fn is_lockfile_stale(repo: &Path, manifest: &str, lockfile: &str) -> bool {
